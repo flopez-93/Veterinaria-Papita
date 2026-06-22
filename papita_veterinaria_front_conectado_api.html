@@ -241,7 +241,7 @@ const DATA = {
 
 const HORARIOS = ['09:00','09:30','10:00','10:30','11:00','11:30','14:00','14:30','15:00','15:30','16:00','16:30'];
 
-let state = { user: null, page: 'dashboard', modal: null, toast: null, turnoWizard: { step:1, vetId:null, fecha:'', horaSlot:null, mascotaId:null }, newTurnoFecha: '2026-06-03', editingMascota: null, historialMascota: null, turnoTab: 'proximos', ratingTurnoId: null, ratingValue: 5, adminTurnosDesde: '', adminTurnosHasta: '', adminTurnosEstado: '' };
+let state = { user: null, page: 'dashboard', modal: null, toast: null, turnoWizard: { step:1, vetId:null, fecha:'', horaSlot:null, mascotaId:null }, newTurnoFecha: '', editingMascota: null, historialMascota: null, turnoTab: 'proximos', ratingTurnoId: null, ratingValue: 5, adminTurnosDesde: '', adminTurnosHasta: '', adminTurnosEstado: '' };
 
 // === CONEXIÓN CON BACKEND FASTAPI ===
 // Dejá el backend corriendo con: python -m uvicorn main:app --reload
@@ -390,6 +390,11 @@ function getBadgeClass(estado) {
   return map[estado] || 'badge-gray';
 }
 function fmtFecha(f) { return new Date(f+'T00:00:00').toLocaleDateString('es-AR', {day:'2-digit',month:'2-digit',year:'numeric'}); }
+function fechaHoyISO() {
+  const hoy = new Date();
+  const offset = hoy.getTimezoneOffset();
+  return new Date(hoy.getTime() - offset * 60000).toISOString().slice(0, 10);
+}
 function fmtDatetime(dt) {
   const d = new Date(dt);
   return d.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' + d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'});
@@ -635,9 +640,12 @@ function logout() { state.user=null; state.page='dashboard'; render(); }
 
 function renderDashboardCliente() {
   const uid = state.user.id;
+  const hoy = fechaHoyISO();
   const mm = DATA.mascotas.filter(m=>m.clienteId===uid);
   const mt = DATA.turnos.filter(t=>t.clienteId===uid);
-  const px = mt.filter(t=>t.estado==='CONFIRMADO'||t.estado==='PENDIENTE');
+  const px = mt
+    .filter(t=>t.fecha>=hoy && (t.estado==='CONFIRMADO'||t.estado==='PENDIENTE'))
+    .sort((a,b)=>`${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
   return `<div>
     <div class="page-header"><div><h2>Bienvenido, ${state.user.nombre}</h2><p>Resumen de tu cuenta</p></div></div>
     <div class="stat-grid">
@@ -661,11 +669,16 @@ function renderDashboardCliente() {
 }
 
 function renderDashboardVet() {
-  const uid = state.user.id; const hoy = '2026-06-03';
+  const uid = state.user.id;
+  const hoy = fechaHoyISO();
   const mt = DATA.turnos.filter(t=>t.vetId===uid);
-  const th = mt.filter(t=>t.fecha===hoy);
-  const px = mt.filter(t=>t.fecha>hoy && (t.estado==='CONFIRMADO'||t.estado==='PENDIENTE'));
-  const pendientes = mt.filter(t=>t.estado==='PENDIENTE');
+  const vigentes = mt
+    .filter(t=>t.fecha>=hoy && (t.estado==='CONFIRMADO'||t.estado==='PENDIENTE'))
+    .sort((a,b)=>`${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
+  const th = vigentes.filter(t=>t.fecha===hoy);
+  const px = vigentes.filter(t=>t.fecha>hoy);
+  const pendientes = vigentes.filter(t=>t.estado==='PENDIENTE');
+  const historiasClinicas = DATA.historial.filter(h=>Number(h.vetId)===Number(uid));
   const calificaciones = getCalificacionesVet(uid);
   const promedio = promedioVet(uid);
   return `<div>
@@ -683,17 +696,17 @@ function renderDashboardVet() {
       <div class="stat-card blue"><div class="label">Turnos Hoy</div><div class="value">${th.length}</div></div>
       <div class="stat-card green"><div class="label">Turnos Próximos</div><div class="value">${px.length}</div></div>
       <div class="stat-card amber"><div class="label">Pendientes de aprobar</div><div class="value">${pendientes.length}</div></div>
-      <div class="stat-card blue"><div class="label">Atenciones Históricas</div><div class="value">${mt.filter(t=>t.estado==='COMPLETADO').length}</div></div>
+      <div class="stat-card blue"><div class="label">Historias clínicas</div><div class="value">${historiasClinicas.length}</div></div>
     </div>
-    <div class="card"><div class="card-title">Agenda Reciente</div>
-      ${mt.filter(t=>t.fecha>=hoy).slice(0,8).map(t=>{
+    <div class="card"><div class="card-title">Agenda vigente</div>
+      ${vigentes.length===0?'<p style="font-size:0.85rem;color:var(--muted)">No hay turnos vigentes.</p>':vigentes.slice(0,8).map(t=>{
         const m = getMascota(t.mascotaId), c = getCliente(t.clienteId);
         return `<div class="turno-card">
           <div class="turno-card-header"><span class="turno-card-title">${m?.nombre||'?'} (${m?.especie}) - Titular: ${c?.nombre||'?'}</span><span class="badge ${getBadgeClass(t.estado)}">${t.estado}</span></div>
           <div class="turno-card-meta"><span>Fecha: ${fmtFecha(t.fecha)}</span><span>Hora: ${t.hora}</span></div>
           <div class="turno-card-actions">
             ${t.estado==='PENDIENTE' ? `<button class="btn-sm" onclick="confirmarTurno(${t.id})">Aprobar Turno</button>` : ''}
-            ${t.estado!=='PENDIENTE' ? `<button class="btn-sm" onclick="openRegistrarConsulta(${t.id})">Registrar Consulta</button>` : ''}
+            ${t.estado==='CONFIRMADO' && t.fecha<=hoy ? `<button class="btn-sm" onclick="openRegistrarConsulta(${t.id})">Registrar Consulta</button>` : ''}
             <button class="btn-outline" onclick="verHistorialMascota(${t.mascotaId})">Ver HC</button>
           </div>
         </div>`;
@@ -782,6 +795,8 @@ function renderTurnos() {
 
 function renderNuevoTurno() {
   const w = state.turnoWizard, vets = DATA.usuarios.filter(u=>u.rol==='VETERINARIO'), mm = DATA.mascotas.filter(m=>m.clienteId===state.user.id);
+  const hoy = fechaHoyISO();
+  if(w.step===2 && !w.fecha) w.fecha = hoy;
   const to = DATA.turnos.filter(t=>t.vetId===w.vetId && t.fecha===w.fecha && t.estado!=='CANCELADO').map(t=>t.hora);
   return `<div>
     <div class="page-header"><div><h2>Reservar Turno</h2><p>Asistente de agendamiento</p></div></div>
@@ -795,7 +810,7 @@ function renderNuevoTurno() {
         </div>`).join('')}</div></div>`:''}
       ${w.step===2?`<div class="two-col">
         <div><label style="display:block;font-size:0.8rem;font-weight:600;margin-bottom:0.5rem">Fecha de consulta</label>
-        <input type="date" value="${w.fecha||'2026-06-03'}" min="2026-06-01" style="width:100%;padding:0.6rem;border:2px solid #dfe1e6;border-radius:4px" onchange="state.turnoWizard.fecha=this.value;state.turnoWizard.horaSlot=null;render()"></div>
+        <input type="date" value="${w.fecha}" min="${hoy}" style="width:100%;padding:0.6rem;border:2px solid #dfe1e6;border-radius:4px" onchange="state.turnoWizard.fecha=this.value;state.turnoWizard.horaSlot=null;render()"></div>
         <div><label style="display:block;font-size:0.8rem;font-weight:600;margin-bottom:0.5rem">Disponibilidad</label>
         ${w.fecha?HORARIOS.map(h=>{ const b=to.includes(h), s=w.horaSlot===h; return `<div class="agenda-slot ${b?'slot-busy':s?'slot-sel':'slot-free'}" onclick="${b?'':'state.turnoWizard.horaSlot=\''+h+'\';render()'}">${h} ${b?'(No disponible)':''}</div>`; }).join(''):'<p style="font-size:0.85rem;color:#5e6c84">Indique fecha.</p>'}</div>
         <div style="grid-column:1/-1;display:flex;gap:0.5rem;margin-top:1rem;border-top:1px solid #dfe1e6;padding-top:1rem"><button class="btn-outline" onclick="state.turnoWizard.step=1;render()">Atrás</button><button class="btn-sm" ${w.horaSlot?'':'disabled'} onclick="if(state.turnoWizard.horaSlot){state.turnoWizard.step=3;render()}">Continuar</button></div>
@@ -813,6 +828,10 @@ async function confirmarNuevoTurno() {
   const w = state.turnoWizard;
   if (!w.vetId || !w.fecha || !w.horaSlot || !w.mascotaId) {
     showToast('Completá profesional, fecha, horario y mascota', true);
+    return;
+  }
+  if (w.fecha < fechaHoyISO()) {
+    showToast('La fecha del turno no puede ser anterior a hoy', true);
     return;
   }
 
@@ -1242,7 +1261,11 @@ function abrirWhatsAppUrgencias() {
 function render() { 
   const app = document.getElementById('app'); 
   if(!state.user){ 
-    app.innerHTML = renderAuth() + renderModal(); 
+    app.innerHTML = `
+      ${renderAuth()}
+      ${renderModal()}
+      ${state.toast ? `<div class="toast ${state.toast.err ? 'error' : ''}">${state.toast.msg}</div>` : ''}
+    `; 
     return; 
   } 
   app.innerHTML = `
